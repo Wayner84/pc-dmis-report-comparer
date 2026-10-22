@@ -1,10 +1,117 @@
-const NUMBER = '[-+]?(?:\d+(?:[.,]\d*)?|[.,]\d+)';
-const ROW = new RegExp(String.raw`^\s*(\S+)\s+(${NUMBER})\s+(${NUMBER})\s+(${NUMBER})\s+(${NUMBER})\s+(${NUMBER})\s+(${NUMBER})\s*$`);
-const VALUES = new RegExp(String.raw`^\s*(${NUMBER})\s+(${NUMBER})\s+(${NUMBER})\s+(${NUMBER})\s+(${NUMBER})\s+(${NUMBER})\s*$`);
-const num = s => Number(String(s).replace(',', '.'));
-function axis(raw, values, feature) { let a=(raw||'').toUpperCase().trim('|:;,.(){}[]'); a={ '[':'D',']':'D','0':'D','O':'D','1':'I','M1':'M'}[a]||a; if(!a&&/AXIS/i.test(feature)) return 'M'; if(!['X','Y','Z','D','R','RN','A','M','PA','PR','I','J','K','L'].includes(a)){ if(/^DIST/i.test(feature)) return 'M'; if(/^ANGL/i.test(feature)) return 'A'; if(values[0] && Math.abs(values[0])>=1) a='D'; } return a; }
-function featureFrom(lines, header) { let title=(lines.slice(0,header).map(x=>x.trim()).filter(Boolean).pop()||'').replace(/^.*?\b(?:MM|DEG|INCH)\b[\s|J]*/i,''); const known=title.match(/\b(?:LOC\w*|DIST\w*|BIST\w*|ANGL\w*|CONCEN\w*|CIRC\w*|CYLN\w*|FLAT\w*|PERP\w*|PARA\w*|POS\w*)/i); if(known) title=title.slice(known.index); title=title.replace(/\s+/g,' ').trim(' |_-' ).replace(/^LOCI\b/i,'LOC1').replace(/^DISTT\b/i,'DIST1').replace(/^BIST2\b/i,'DIST2').replace(/^ANGLT\b/i,'ANGL1'); return title||'Unnamed feature'; }
-export function parseOcrTable(text, source, page, table) { const lines=text.split(String.fromCharCode(10)); const h=lines.findIndex(l=>/NOMINAL/i.test(l)&&/MEAS/i.test(l)); if(h<0)return []; const f=featureFrom(lines,h); return lines.slice(h+1).flatMap(line=>{let c=line.trim().replace(/^\|/,'').replace(/\|$/,'').trim(), parts=c.split(/\s+/), raw='', vals; if(parts.length===7){raw=parts[0];vals=parts.slice(1).map(num)} else if(parts.length===6){vals=parts.map(num)} else return []; return [{source,page,table,feature:f,axis:axis(raw,vals,f),nominal:vals[0],plusTol:Math.abs(vals[1]),minusTol:Math.abs(vals[2]),actual:vals[3],deviation:vals[4],outtol:vals[5]}];}); }
-export function compareReports(reports) { const names=Object.keys(reports), maps={}, order=[], seen=new Set(); for(const [name,rows] of Object.entries(reports)){maps[name]=new Map();const occ={}; for(const r of rows){const b=`${r.page}|${r.table}|${r.axis}`, n=occ[b]||0;occ[b]=n+1;const k=`${b}|${n}`;maps[name].set(k,r);if(!seen.has(k)){seen.add(k);order.push(k)}}} return order.map(k=>{const present=names.filter(n=>maps[n].has(k)).map(n=>maps[n].get(k));if(!present.length)return null;const ref=present[0], actuals=Object.fromEntries(names.map(n=>[n,maps[n].get(k)?.actual??null])), vals=Object.values(actuals).filter(v=>v!==null), tol=present.every(r=>Math.abs(r.nominal-ref.nominal)<1e-9&&Math.abs(r.plusTol-ref.plusTol)<1e-9&&Math.abs(r.minusTol-ref.minusTol)<1e-9), complete=present.length===names.length, inSpec=tol&&complete&&vals.every(v=>v>=ref.nominal-ref.minusTol-1e-9&&v<=ref.nominal+ref.plusTol+1e-9); return {...ref,lowerLimit:ref.nominal-ref.minusTol,upperLimit:ref.nominal+ref.plusTol,actuals,spread:vals.length>1?Math.max(...vals)-Math.min(...vals):0,status:!complete||!tol?'CHECK DATA':inSpec?'IN SPEC':'OUT OF SPEC',inSpec,toleranceMatch:tol};}).filter(Boolean); }
-const csvCell=v=>`"${String(v??'').replaceAll('"','""')}"`;
-export function exportComparisonCsv(rows,names){const head=['Feature','Axis','Nominal','+ tolerance','- tolerance','Lower limit','Upper limit',...names.map(n=>`${n} actual`),'Lot spread (max-min)','Status']; return [head,...rows.map(r=>[r.feature,r.axis,r.nominal,r.plusTol,r.minusTol,r.lowerLimit,r.upperLimit,...names.map(n=>r.actuals[n]),r.spread,r.status])].map(row=>row.map(csvCell).join(',')).join('\r\n')+'\r\n';}
+const NUMBER = '[-+]?(?:\\d+(?:[.,]\\d*)?|[.,]\\d+)';
+const ROW = new RegExp(`^\\s*(\\S+)\\s+(${NUMBER})\\s+(${NUMBER})\\s+(${NUMBER})\\s+(${NUMBER})\\s+(${NUMBER})\\s+(${NUMBER})\\s*$`);
+const VALUES = new RegExp(`^\\s*(${NUMBER})\\s+(${NUMBER})\\s+(${NUMBER})\\s+(${NUMBER})\\s+(${NUMBER})\\s+(${NUMBER})\\s*$`);
+const VALID_AXES = new Set(['X', 'Y', 'Z', 'D', 'R', 'RN', 'A', 'M', 'PA', 'PR', 'I', 'J', 'K', 'L']);
+
+const number = value => Number(String(value).replace(',', '.'));
+
+function cleanAxis(raw, values, feature) {
+  let result = (raw || '').toUpperCase().replace(/^[|:;,.(){}\[\]]+|[|:;,.(){}\[\]]+$/g, '');
+  result = ({ '[': 'D', ']': 'D', '0': 'D', O: 'D', '1': 'I', M1: 'M' })[raw?.toUpperCase()] || result;
+  if (result === 'E') return Math.abs(values[0]) >= 1 ? 'D' : 'Z';
+  if (result === 'R' && Math.abs(values[0]) < 1e-9) return 'RN';
+  if (!result && /AXIS/i.test(feature)) return 'M';
+  if (!VALID_AXES.has(result)) {
+    if (/^DIST/i.test(feature)) return 'M';
+    if (/^ANGL/i.test(feature)) return 'A';
+    if (Math.abs(values[0]) >= 1) return 'D';
+  }
+  return result;
+}
+
+function featureFrom(lines, headerIndex) {
+  let title = lines.slice(0, headerIndex).map(line => line.trim()).filter(Boolean).pop() || '';
+  title = title.replace(/^.*?\b(?:MM|DEG|INCH)\b[\s|J]*/i, '');
+  const known = title.match(/\b(?:LOC\w*|OCT\w*|DIST\w*|BIST\w*|ANGL\w*|CONCEN\w*|CIRC\w*|CYLN\w*|FLAT\w*|PERP\w*|PARA\w*|POS\w*)/i);
+  if (known) title = title.slice(known.index);
+  return title.replace(/\s+/g, ' ').replace(/^[\s|_-]+|[\s|_-]+$/g, '')
+    .replace(/^OCT\b/i, 'LOC1').replace(/^LOCI\b/i, 'LOC1').replace(/^DISTT\b/i, 'DIST1')
+    .replace(/^BIST2\b/i, 'DIST2').replace(/^ANGLT\b/i, 'ANGL1')
+    .replace(/\bBAUM\b/ig, 'DATUM').replace(/\bON$/i, 'CYL') || 'Unnamed feature';
+}
+
+export function parseOcrTable(text, source, page, table) {
+  const lines = text.split(/\r?\n/);
+  const headerIndex = lines.findIndex(line => /NOMINAL/i.test(line) && /MEAS/i.test(line));
+  if (headerIndex < 0) return [];
+  const feature = featureFrom(lines, headerIndex);
+  return lines.slice(headerIndex + 1).flatMap(line => {
+    const cleaned = line.replace(/^\s*\|\s*/, '').trim().replace(/\|\s*$/, '').trim();
+    const match = ROW.exec(cleaned);
+    const valuesOnly = match ? null : VALUES.exec(cleaned);
+    if (!match && !valuesOnly) return [];
+    const rawAxis = match ? match[1] : '';
+    const values = (match ? match.slice(2) : valuesOnly.slice(1)).map(number);
+    if (values.some(value => !Number.isFinite(value))) return [];
+    const suspicious = Math.abs((values[3] - values[0]) - values[4]) > 0.0021;
+    return [{
+      source, page, table, feature,
+      axis: cleanAxis(rawAxis, values, feature),
+      nominal: values[0], plusTol: Math.abs(values[1]), minusTol: Math.abs(values[2]),
+      actual: values[3], deviation: values[4], outtol: values[5], suspicious,
+    }];
+  });
+}
+
+export function parseOcrPage(text, source, page) {
+  const lines = text.split(/\r?\n/);
+  const headers = lines.flatMap((line, index) => /NOMINAL/i.test(line) && /MEAS/i.test(line) ? [index] : []);
+  return headers.flatMap((header, index) => {
+    const previousHeader = index ? headers[index - 1] : -1;
+    const nextHeader = headers[index + 1] ?? lines.length;
+    const titleStart = Math.max(previousHeader + 1, header - 4);
+    return parseOcrTable(lines.slice(titleStart, nextHeader).join('\n'), source, page, index + 1);
+  });
+}
+
+export function compareReports(reports) {
+  const names = Object.keys(reports);
+  const maps = {};
+  const order = [];
+  const seen = new Set();
+  for (const [name, rows] of Object.entries(reports)) {
+    maps[name] = new Map();
+    const occurrences = {};
+    for (const row of rows) {
+      const base = `${row.page}|${row.table}|${row.axis}`;
+      const occurrence = occurrences[base] || 0;
+      occurrences[base] = occurrence + 1;
+      const key = `${base}|${occurrence}`;
+      maps[name].set(key, row);
+      if (!seen.has(key)) { seen.add(key); order.push(key); }
+    }
+  }
+  return order.flatMap(key => {
+    const present = names.filter(name => maps[name].has(key)).map(name => maps[name].get(key));
+    if (!present.length) return [];
+    const reference = present[0];
+    const actuals = Object.fromEntries(names.map(name => [name, maps[name].get(key)?.actual ?? null]));
+    const values = Object.values(actuals).filter(value => value !== null);
+    const toleranceMatch = present.every(row => Math.abs(row.nominal - reference.nominal) < 1e-9
+      && Math.abs(row.plusTol - reference.plusTol) < 1e-9
+      && Math.abs(row.minusTol - reference.minusTol) < 1e-9);
+    const complete = present.length === names.length;
+    const dataReliable = present.every(row => !row.suspicious);
+    const inSpec = toleranceMatch && complete && values.every(value => value >= reference.nominal - reference.minusTol - 1e-9
+      && value <= reference.nominal + reference.plusTol + 1e-9);
+    return [{
+      ...reference,
+      lowerLimit: reference.nominal - reference.minusTol,
+      upperLimit: reference.nominal + reference.plusTol,
+      actuals,
+      spread: values.length > 1 ? Math.max(...values) - Math.min(...values) : 0,
+      status: !complete || !toleranceMatch || !dataReliable ? 'CHECK DATA' : inSpec ? 'IN SPEC' : 'OUT OF SPEC',
+      inSpec,
+      toleranceMatch,
+    }];
+  });
+}
+
+const csvCell = value => `"${String(value ?? '').replaceAll('"', '""')}"`;
+export function exportComparisonCsv(rows, names) {
+  const header = ['Feature', 'Axis', 'Nominal', '+ tolerance', '- tolerance', 'Lower limit', 'Upper limit',
+    ...names.map(name => `${name} actual`), 'Lot spread (max-min)', 'Status'];
+  const data = rows.map(row => [row.feature, row.axis, row.nominal, row.plusTol, row.minusTol,
+    row.lowerLimit, row.upperLimit, ...names.map(name => row.actuals[name]), row.spread, row.status]);
+  return `\ufeff${[header, ...data].map(row => row.map(csvCell).join(',')).join('\r\n')}\r\n`;
+}
