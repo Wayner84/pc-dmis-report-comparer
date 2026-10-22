@@ -1,4 +1,5 @@
 import { compareReports, exportComparisonCsv, parseOcrPage, parseOcrTable } from './src/parser.js';
+import { updateEditableText } from './src/editor.js';
 
 const $ = selector => document.querySelector(selector);
 const MAX_FILES = 10;
@@ -7,6 +8,7 @@ const MAX_PAGES = 100;
 let files = [];
 let comparison = [];
 let reportNames = [];
+let editingLabels = false;
 
 const drop = $('#drop');
 $('#files').addEventListener('change', event => selectFiles([...event.target.files]));
@@ -180,7 +182,46 @@ function appendCell(row, tag, text, className) {
   if (tag === 'th') cell.scope = row.parentElement?.tagName === 'THEAD' ? 'col' : 'row';
   if (className) cell.className = className;
   row.append(cell);
+  return cell;
 }
+
+function configureEditableCell(cell, rowIndex, field) {
+  cell.setAttribute('data-editable-field', field);
+  cell.dataset.rowIndex = String(rowIndex);
+  cell.contentEditable = 'false';
+  cell.addEventListener('input', () => {
+    updateEditableText(comparison, rowIndex, field, cell.textContent);
+  });
+  cell.addEventListener('blur', () => {
+    if (!updateEditableText(comparison, rowIndex, field, cell.textContent)) {
+      cell.textContent = comparison[rowIndex][field];
+    }
+  });
+}
+
+function setEditingLabels(enabled) {
+  editingLabels = enabled;
+  const button = $('#edit-labels');
+  button.setAttribute('aria-pressed', String(enabled));
+  button.textContent = enabled ? 'Finish editing' : 'Edit feature/axis text';
+  $('#edit-status').textContent = enabled
+    ? 'Editing enabled. Select any feature or axis cell, type the correction, then choose Finish editing. Changes are included in CSV export.'
+    : 'Feature and axis text is locked. Choose Edit to correct OCR text before export.';
+  for (const cell of document.querySelectorAll('[data-editable-field]')) {
+    cell.contentEditable = enabled ? 'plaintext-only' : 'false';
+    if (enabled) {
+      cell.tabIndex = 0;
+      cell.setAttribute('role', 'textbox');
+      cell.setAttribute('aria-label', `Edit ${cell.dataset.editableField} text`);
+    } else {
+      cell.removeAttribute('tabindex');
+      cell.removeAttribute('role');
+      cell.removeAttribute('aria-label');
+    }
+  }
+}
+
+$('#edit-labels').addEventListener('click', () => setEditingLabels(!editingLabels));
 
 function format(value) {
   return value == null ? '—' : Number(value).toFixed(4);
@@ -195,11 +236,13 @@ function renderResults() {
   $('#thead').replaceChildren(header);
 
   const body = document.createDocumentFragment();
-  for (const result of comparison) {
+  comparison.forEach((result, rowIndex) => {
     const row = document.createElement('tr');
-    appendCell(row, 'th', result.feature);
-    row.firstElementChild.scope = 'row';
-    appendCell(row, 'td', result.axis);
+    const featureCell = appendCell(row, 'th', result.feature);
+    featureCell.scope = 'row';
+    configureEditableCell(featureCell, rowIndex, 'feature');
+    const axisCell = appendCell(row, 'td', result.axis);
+    configureEditableCell(axisCell, rowIndex, 'axis');
     appendCell(row, 'td', format(result.nominal));
     appendCell(row, 'td', format(result.lowerLimit));
     appendCell(row, 'td', format(result.upperLimit));
@@ -207,8 +250,9 @@ function renderResults() {
     appendCell(row, 'td', format(result.spread));
     appendCell(row, 'td', result.status, `status ${result.status.toLowerCase().replaceAll(' ', '-')}`);
     body.append(row);
-  }
+  });
   $('#tbody').replaceChildren(body);
+  setEditingLabels(false);
   $('#result-summary').textContent = `${comparison.length} aligned measurement rows · ${comparison.filter(row => row.status === 'CHECK DATA').length} require review`;
   $('#results').hidden = false;
 }

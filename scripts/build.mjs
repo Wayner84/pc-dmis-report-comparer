@@ -6,7 +6,7 @@ await mkdir(`${output}/vendor/lang`, { recursive: true });
 await mkdir(`${output}/src`, { recursive: true });
 
 for (const file of ['index.html', 'app.css', 'app.js']) await copyFile(file, `${output}/${file}`);
-await copyFile('src/parser.js', `${output}/src/parser.js`);
+for (const file of ['parser.js', 'editor.js']) await copyFile(`src/${file}`, `${output}/src/${file}`);
 
 const assets = [
   ['node_modules/pdfjs-dist/build/pdf.mjs', 'vendor/pdf.mjs'],

@@ -11,6 +11,7 @@ const requiredRuntimeAssets = [
   'dist/vendor/tesseract-core-simd-lstm.wasm.js',
   'dist/vendor/tesseract-core-simd-lstm.wasm',
   'dist/vendor/lang/eng.traineddata.gz',
+  'dist/src/editor.js',
 ];
 
 test('build vendors every PDF and OCR runtime asset', async () => {
@@ -33,6 +34,28 @@ test('browser app pins local workers, OCR core and language data', async () => {
   assert.match(source, /await pdf\.cleanup\(\)/);
   assert.doesNotMatch(source, /pdf\.destroy\(/);
   assert.doesNotMatch(source, /innerHTML\s*=/);
+});
+
+test('results use a keyboard-focusable two-axis viewport with sticky headers', async () => {
+  const html = await readFile('index.html', 'utf8');
+  const css = await readFile('app.css', 'utf8');
+  assert.match(html, /class="table-wrap"[^>]*id="table-viewport"[^>]*tabindex="0"/);
+  assert.match(html, /aria-label="Scrollable comparison results"/);
+  assert.match(css, /\.table-wrap\{[^}]*overflow:auto[^}]*max-height:/);
+  assert.match(css, /thead th\{[^}]*position:sticky[^}]*top:0/);
+  assert.match(css, /tbody th:first-child\{[^}]*position:sticky[^}]*left:0/);
+  assert.match(css, /\.table-wrap:focus-visible/);
+});
+
+test('results expose an accessible label editor that updates the export model', async () => {
+  const html = await readFile('index.html', 'utf8');
+  const source = await readFile('app.js', 'utf8');
+  assert.match(html, /id="edit-labels"[^>]*aria-pressed="false"/);
+  assert.match(html, /id="edit-status"[^>]*aria-live="polite"/);
+  assert.match(source, /import \{ updateEditableText \} from ['"]\.\/src\/editor\.js['"]/);
+  assert.match(source, /data-editable-field/);
+  assert.match(source, /contentEditable/);
+  assert.match(source, /updateEditableText\(comparison/);
 });
 
 test('development server implementation exists', async () => {

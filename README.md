@@ -2,6 +2,8 @@
 
 A browser-only static app for comparing 1–10 bitmap-based PC-DMIS PDF reports. PDF pages are rendered and OCR'd in the current browser tab. No report contents are uploaded, stored, tracked, or sent to an application server.
 
+Results appear in a two-axis scroll window with sticky headers and a frozen feature column. Use **Edit feature/axis text** to correct OCR labels before downloading the CSV.
+
 **Live app:** <https://wayner84.github.io/pc-dmis-report-comparer/>
 
 ## Development
