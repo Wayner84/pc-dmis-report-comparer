@@ -1,8 +1,9 @@
 import { compareReports, exportComparisonCsv, parseOcrPage, parseOcrTable } from './src/parser.js';
 import { updateEditableText } from './src/editor.js';
+import { cacheParsedRows, fingerprintBytes, getCachedRows } from './src/processing.js';
 
 const $ = selector => document.querySelector(selector);
-const MAX_FILES = 10;
+const MAX_FILES = 20;
 const MAX_FILE_BYTES = 100 * 1024 * 1024;
 const MAX_PAGES = 100;
 let files = [];
@@ -27,7 +28,7 @@ function selectFiles(candidates) {
   files = pdfs.filter(file => file.size <= MAX_FILE_BYTES).slice(0, MAX_FILES);
   const rejected = candidates.length - files.length;
   $('#file-summary').textContent = files.length
-    ? `${files.length} report${files.length > 1 ? 's' : ''} selected: ${files.map(file => file.name).join(', ')}${rejected ? `. ${rejected} file(s) rejected by type, size, or the 10-report limit.` : ''}`
+    ? `${files.length} report${files.length > 1 ? 's' : ''} selected: ${files.map(file => file.name).join(', ')}${rejected ? `. ${rejected} file(s) rejected by type, size, or the 20-report limit.` : ''}`
     : 'No valid PDF reports selected.';
   $('#compare').disabled = !files.length;
 }
@@ -131,43 +132,70 @@ $('#compare').addEventListener('click', async () => {
     await worker.setParameters({ tessedit_pageseg_mode: '6', preserve_interword_spaces: '1' });
 
     const reports = {};
+    const parsedRowsCache = new Map();
+    const failures = [];
     reportNames = uniqueNames(files);
     for (let index = 0; index < files.length; index += 1) {
       const file = files[index];
       const name = reportNames[index];
-      $('#progress').textContent = `Loading ${file.name} (${index + 1}/${files.length})…`;
-      const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer(), isEvalSupported: false }).promise;
-      if (pdf.numPages > MAX_PAGES) throw new Error(`${file.name} exceeds the ${MAX_PAGES}-page safety limit.`);
-      const rows = [];
-      for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
-        const page = await pdf.getPage(pageNumber);
-        const tableCanvases = await extractTableCanvases(pdfjs, page);
-        if (tableCanvases.length) {
-          for (let tableIndex = 0; tableIndex < tableCanvases.length; tableIndex += 1) {
-            $('#progress').textContent = `OCR ${file.name}, page ${pageNumber}/${pdf.numPages}, table ${tableIndex + 1}/${tableCanvases.length}…`;
-            const output = await worker.recognize(tableCanvases[tableIndex]);
-            rows.push(...parseOcrTable(output.data.text, name, pageNumber, tableIndex + 1));
-          }
-        } else {
-          const viewport = page.getViewport({ scale: 2.5 });
-          const canvas = document.createElement('canvas');
-          canvas.width = Math.ceil(viewport.width);
-          canvas.height = Math.ceil(viewport.height);
-          const context = canvas.getContext('2d', { alpha: false });
-          await page.render({ canvasContext: context, viewport, background: 'white' }).promise;
-          $('#progress').textContent = `OCR ${file.name}, page ${pageNumber}/${pdf.numPages}…`;
-          const output = await worker.recognize(canvas);
-          rows.push(...parseOcrPage(output.data.text, name, pageNumber));
+      try {
+        const bytes = await file.arrayBuffer();
+        const fingerprint = await fingerprintBytes(bytes);
+        const cachedRows = getCachedRows(parsedRowsCache, fingerprint, name);
+        if (cachedRows) {
+          reports[name] = cachedRows;
+          $('#progress').textContent = `Reused OCR for identical report ${file.name} (${index + 1}/${files.length})…`;
+          continue;
         }
-        page.cleanup();
+        $('#progress').textContent = `Loading ${file.name} (${index + 1}/${files.length})…`;
+        const pdf = await pdfjs.getDocument({ data: bytes, isEvalSupported: false }).promise;
+        try {
+          if (pdf.numPages > MAX_PAGES) throw new Error(`${file.name} exceeds the ${MAX_PAGES}-page safety limit.`);
+          const rows = [];
+          for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+            const page = await pdf.getPage(pageNumber);
+            try {
+              const tableCanvases = await extractTableCanvases(pdfjs, page);
+              if (tableCanvases.length) {
+                for (let tableIndex = 0; tableIndex < tableCanvases.length; tableIndex += 1) {
+                  $('#progress').textContent = `OCR ${file.name}, page ${pageNumber}/${pdf.numPages}, table ${tableIndex + 1}/${tableCanvases.length}…`;
+                  const output = await worker.recognize(tableCanvases[tableIndex]);
+                  rows.push(...parseOcrTable(output.data.text, name, pageNumber, tableIndex + 1));
+                }
+              } else {
+                const viewport = page.getViewport({ scale: 2.5 });
+                const canvas = document.createElement('canvas');
+                canvas.width = Math.ceil(viewport.width);
+                canvas.height = Math.ceil(viewport.height);
+                const context = canvas.getContext('2d', { alpha: false });
+                await page.render({ canvasContext: context, viewport, background: 'white' }).promise;
+                $('#progress').textContent = `OCR ${file.name}, page ${pageNumber}/${pdf.numPages}…`;
+                const output = await worker.recognize(canvas);
+                rows.push(...parseOcrPage(output.data.text, name, pageNumber));
+                canvas.width = 0;
+                canvas.height = 0;
+              }
+            } finally {
+              page.cleanup();
+            }
+          }
+          if (!rows.length) throw new Error(`No standard PC-DMIS measurement tables were recognised in ${file.name}.`);
+          cacheParsedRows(parsedRowsCache, fingerprint, rows);
+          reports[name] = rows;
+        } finally {
+          await pdf.cleanup();
+        }
+      } catch (error) {
+        failures.push(`${file.name}: ${error.message}`);
+        $('#progress').textContent = `Skipped ${file.name}: ${error.message}`;
       }
-      await pdf.cleanup();
-      if (!rows.length) throw new Error(`No standard PC-DMIS measurement tables were recognised in ${file.name}.`);
-      reports[name] = rows;
     }
+    if (!Object.keys(reports).length) throw new Error(`No reports could be processed. ${failures.join(' | ')}`);
     comparison = compareReports(reports);
     renderResults();
-    $('#progress').textContent = 'Complete. Review CHECK DATA rows and the source reports.';
+    $('#progress').textContent = failures.length
+      ? `Complete with ${failures.length} failed report${failures.length > 1 ? 's' : ''}: ${failures.join(' | ')}`
+      : 'Complete. Review CHECK DATA rows and the source reports.';
   } catch (error) {
     $('#progress').textContent = `Could not process reports: ${error.message}`;
   } finally {

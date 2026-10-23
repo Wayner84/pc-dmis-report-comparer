@@ -4,9 +4,11 @@ const output = 'dist';
 await rm(output, { recursive: true, force: true });
 await mkdir(`${output}/vendor/lang`, { recursive: true });
 await mkdir(`${output}/src`, { recursive: true });
+await mkdir(`${output}/assets`, { recursive: true });
 
 for (const file of ['index.html', 'app.css', 'app.js']) await copyFile(file, `${output}/${file}`);
-for (const file of ['parser.js', 'editor.js']) await copyFile(`src/${file}`, `${output}/src/${file}`);
+await copyFile('assets/tpl-logo-pink.png', `${output}/assets/tpl-logo-pink.png`);
+for (const file of ['parser.js', 'editor.js', 'processing.js']) await copyFile(`src/${file}`, `${output}/src/${file}`);
 
 const assets = [
   ['node_modules/pdfjs-dist/build/pdf.mjs', 'vendor/pdf.mjs'],

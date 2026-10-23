@@ -12,6 +12,8 @@ const requiredRuntimeAssets = [
   'dist/vendor/tesseract-core-simd-lstm.wasm',
   'dist/vendor/lang/eng.traineddata.gz',
   'dist/src/editor.js',
+  'dist/src/processing.js',
+  'dist/assets/tpl-logo-pink.png',
 ];
 
 test('build vendors every PDF and OCR runtime asset', async () => {
@@ -32,6 +34,9 @@ test('browser app pins local workers, OCR core and language data', async () => {
   assert.match(source, /OPS\.paintImageXObject/);
   assert.match(source, /parseOcrTable/);
   assert.match(source, /await pdf\.cleanup\(\)/);
+  assert.match(source, /fingerprintBytes/);
+  assert.match(source, /Reused OCR for identical report/);
+  assert.match(source, /Complete with .*failed report/);
   assert.doesNotMatch(source, /pdf\.destroy\(/);
   assert.doesNotMatch(source, /innerHTML\s*=/);
 });
@@ -56,6 +61,16 @@ test('results expose an accessible label editor that updates the export model', 
   assert.match(source, /data-editable-field/);
   assert.match(source, /contentEditable/);
   assert.match(source, /updateEditableText\(comparison/);
+});
+
+test('file selection and visible copy consistently allow up to 20 reports', async () => {
+  const html = await readFile('index.html', 'utf8');
+  const source = await readFile('app.js', 'utf8');
+  assert.match(source, /const MAX_FILES = 20;/);
+  assert.match(source, /20-report limit/);
+  assert.match(html, /Compare up to 20 PDF inspection reports/);
+  assert.match(html, /1–20 reports/);
+  assert.doesNotMatch(html, /up to 10|1–10/);
 });
 
 test('development server implementation exists', async () => {
