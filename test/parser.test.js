@@ -34,6 +34,33 @@ test('aligns repeated axes by occurrence and marks missing data', () => {
   assert.equal(rows.find(r => r.axis === 'X').status, 'CHECK DATA');
 });
 
+test('missing row and page reflow do not move 22 mm into the 9.5 mm row', () => {
+  const m = (source, page, table, feature, axis, nominal, actual) => ({
+    source, page, table, feature, axis, nominal, plusTol: .1, minusTol: .1, actual,
+  });
+  const reports = {
+    'one.pdf': [
+      m('one.pdf', 1, 1, 'LOC10', 'X', 1, 1.001),
+      m('one.pdf', 1, 2, 'LOC11', 'X', 38.05, 38.04),
+      m('one.pdf', 2, 1, 'LOC12', 'X', 22, 21.988),
+      m('one.pdf', 2, 2, 'LOC13', 'X', 9.5, 9.494),
+    ],
+    'two.pdf': [
+      m('two.pdf', 1, 1, 'LOC10', 'X', 1, 1.002),
+      m('two.pdf', 1, 2, 'LOC12', 'X', 22, 21.986),
+      m('two.pdf', 2, 1, 'LOC13', 'X', 9.5, 9.492),
+    ],
+  };
+  const rows = compareReports(reports);
+  const result22 = rows.find(row => row.nominal === 22);
+  const result95 = rows.find(row => row.nominal === 9.5);
+  assert.deepEqual(result22.actuals, { 'one.pdf': 21.988, 'two.pdf': 21.986 });
+  assert.deepEqual(result95.actuals, { 'one.pdf': 9.494, 'two.pdf': 9.492 });
+  assert.ok(Math.abs(result22.spread - .002) < 1e-9);
+  assert.ok(Math.abs(result95.spread - .002) < 1e-9);
+  assert.equal(rows.find(row => row.nominal === 38.05).status, 'CHECK DATA');
+});
+
 test('exports Excel-friendly CSV with escaped fields', () => {
   const row = compareReports({ 'a.pdf': [{source:'a.pdf',page:1,table:1,feature:'DIST1, WIDTH',axis:'M',nominal:2.5,plusTol:.1,minusTol:.1,actual:2.476}] })[0];
   const csv = exportComparisonCsv([row], ['a.pdf']);

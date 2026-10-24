@@ -1,8 +1,8 @@
 # PC-DMIS Report Comparer
 
-A browser-only static app for comparing 1–10 bitmap-based PC-DMIS PDF reports. PDF pages are rendered and OCR'd in the current browser tab. No report contents are uploaded, stored, tracked, or sent to an application server.
+A browser-only static app for comparing 1–20 bitmap-based PC-DMIS PDF reports. PDF pages are rendered and OCR'd in the current browser tab. No report contents are uploaded, stored, tracked, or sent to an application server.
 
-Results appear in a two-axis scroll window with sticky headers and a frozen feature column. Use **Edit feature/axis text** to correct OCR labels before downloading the CSV.
+Results appear in a two-axis scroll window with sticky headers and a frozen feature column. Use **Edit feature/axis text** to correct OCR labels before downloading the CSV. Measurements are globally aligned by axis, nominal and feature similarity, so a missed OCR row or changed page break remains a **CHECK DATA** gap instead of shifting later dimensions into the wrong comparison rows.
 
 **Live app:** <https://wayner84.github.io/pc-dmis-report-comparer/>
 

@@ -64,28 +64,84 @@ export function parseOcrPage(text, source, page) {
   });
 }
 
-export function compareReports(reports) {
-  const names = Object.keys(reports);
-  const maps = {};
-  const order = [];
-  const seen = new Set();
-  for (const [name, rows] of Object.entries(reports)) {
-    maps[name] = new Map();
-    const occurrences = {};
-    for (const row of rows) {
-      const base = `${row.page}|${row.table}|${row.axis}`;
-      const occurrence = occurrences[base] || 0;
-      occurrences[base] = occurrence + 1;
-      const key = `${base}|${occurrence}`;
-      maps[name].set(key, row);
-      if (!seen.has(key)) { seen.add(key); order.push(key); }
+function normalisedFeature(feature) {
+  return String(feature || '').toUpperCase().match(/[A-Z0-9]+/g)?.join(' ') || '';
+}
+
+function featureSimilarity(left, right) {
+  const a = normalisedFeature(left);
+  const b = normalisedFeature(right);
+  if (!a.length && !b.length) return 1;
+  const previous = new Uint16Array(b.length + 1);
+  const current = new Uint16Array(b.length + 1);
+  for (let i = 1; i <= a.length; i += 1) {
+    current[0] = 0;
+    for (let j = 1; j <= b.length; j += 1) {
+      current[j] = a[i - 1] === b[j - 1]
+        ? previous[j - 1] + 1
+        : Math.max(previous[j], current[j - 1]);
+    }
+    previous.set(current);
+  }
+  return previous[b.length] / Math.max(a.length, b.length);
+}
+
+function alignmentMatchScore(left, right) {
+  if (left.axis !== right.axis || Math.abs(left.nominal - right.nominal) >= 1e-9) return null;
+  return 10 + featureSimilarity(left.feature, right.feature) * 4;
+}
+
+function alignMeasurementSequences(existing, incoming) {
+  const gapPenalty = -3;
+  const scores = Array.from({ length: existing.length + 1 }, () => new Float64Array(incoming.length + 1));
+  const moves = Array.from({ length: existing.length + 1 }, () => new Uint8Array(incoming.length + 1));
+  for (let i = 1; i <= existing.length; i += 1) { scores[i][0] = scores[i - 1][0] + gapPenalty; moves[i][0] = 2; }
+  for (let j = 1; j <= incoming.length; j += 1) { scores[0][j] = scores[0][j - 1] + gapPenalty; moves[0][j] = 3; }
+
+  for (let i = 1; i <= existing.length; i += 1) {
+    for (let j = 1; j <= incoming.length; j += 1) {
+      const matchScore = alignmentMatchScore(existing[i - 1], incoming[j - 1]);
+      const match = matchScore === null ? -Infinity : scores[i - 1][j - 1] + matchScore;
+      const skipExisting = scores[i - 1][j] + gapPenalty;
+      const skipIncoming = scores[i][j - 1] + gapPenalty;
+      const best = Math.max(match, skipExisting, skipIncoming);
+      scores[i][j] = best;
+      moves[i][j] = match === best ? 1 : skipExisting === best ? 2 : 3;
     }
   }
-  return order.flatMap(key => {
-    const present = names.filter(name => maps[name].has(key)).map(name => maps[name].get(key));
+
+  const alignment = [];
+  let i = existing.length;
+  let j = incoming.length;
+  while (i || j) {
+    const move = moves[i][j];
+    if (move === 1) { alignment.push([i - 1, j - 1]); i -= 1; j -= 1; }
+    else if (move === 2) { alignment.push([i - 1, null]); i -= 1; }
+    else if (move === 3) { alignment.push([null, j - 1]); j -= 1; }
+    else throw new Error('Measurement alignment did not make progress.');
+  }
+  return alignment.reverse();
+}
+
+export function compareReports(reports) {
+  const names = Object.keys(reports);
+  if (!names.length) return [];
+  let slots = reports[names[0]].map(row => ({ [names[0]]: row }));
+  for (const name of names.slice(1)) {
+    const incoming = reports[name];
+    const representatives = slots.map(slot => Object.values(slot)[0]);
+    slots = alignMeasurementSequences(representatives, incoming).map(([existingIndex, incomingIndex]) => {
+      if (existingIndex === null) return { [name]: incoming[incomingIndex] };
+      const slot = { ...slots[existingIndex] };
+      if (incomingIndex !== null) slot[name] = incoming[incomingIndex];
+      return slot;
+    });
+  }
+  return slots.flatMap(slot => {
+    const present = names.filter(name => slot[name]).map(name => slot[name]);
     if (!present.length) return [];
     const reference = present[0];
-    const actuals = Object.fromEntries(names.map(name => [name, maps[name].get(key)?.actual ?? null]));
+    const actuals = Object.fromEntries(names.map(name => [name, slot[name]?.actual ?? null]));
     const values = Object.values(actuals).filter(value => value !== null);
     const toleranceMatch = present.every(row => Math.abs(row.nominal - reference.nominal) < 1e-9
       && Math.abs(row.plusTol - reference.plusTol) < 1e-9
