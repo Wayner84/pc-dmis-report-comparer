@@ -13,6 +13,7 @@ const requiredRuntimeAssets = [
   'dist/vendor/lang/eng.traineddata.gz',
   'dist/src/editor.js',
   'dist/src/processing.js',
+  'dist/src/capability.js',
   'dist/assets/tpl-logo-pink.png',
 ];
 
@@ -71,6 +72,34 @@ test('file selection and visible copy consistently allow up to 20 reports', asyn
   assert.match(html, /Compare up to 20 PDF inspection reports/);
   assert.match(html, /1–20 reports/);
   assert.doesNotMatch(html, /up to 10|1–10/);
+});
+
+test('review panel and generated table labels remain readable in the dark interface', async () => {
+  const css = await readFile('app.css', 'utf8');
+  assert.match(css, /\.warning\{[^}]*color:\s*#[0-9a-f]{6}/i);
+  assert.match(css, /thead th\{[^}]*color:\s*#[0-9a-f]{6}/i);
+  assert.match(css, /tbody th:first-child\{[^}]*color:\s*#[0-9a-f]{6}/i);
+});
+
+test('capability chart is below the results table and can be saved as an image', async () => {
+  const html = await readFile('index.html', 'utf8');
+  const source = await readFile('app.js', 'utf8');
+  assert.match(html, /id="capability"/);
+  assert.match(html, /id="capability-chart"[^>]*><\/canvas>/);
+  assert.match(html, /id="save-chart"/);
+  assert.ok(html.indexOf('id="capability"') > html.indexOf('id="table-viewport"'));
+  assert.match(source, /drawCapabilityChart/);
+  assert.match(source, /toBlob|toDataURL/);
+  assert.match(source, /image\/png/);
+});
+
+test('capability chart keeps sigma colours inside specification limits and exposes accessible text', async () => {
+  const html = await readFile('index.html', 'utf8');
+  const source = await readFile('app.js', 'utf8');
+  assert.match(html, /id="capability-chart"[^>]*role="img"/);
+  assert.match(html, /id="capability-chart"[^>]*aria-describedby="capability-summary capability-metrics"/);
+  assert.match(source, /context\.clip\(\)/);
+  assert.match(source, /canvas\.setAttribute\('aria-label'/);
 });
 
 test('development server implementation exists', async () => {

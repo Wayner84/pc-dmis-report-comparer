@@ -1,3 +1,5 @@
+import { calculateCapability } from './capability.js';
+
 const NUMBER = '[-+]?(?:\\d+(?:[.,]\\d*)?|[.,]\\d+)';
 const ROW = new RegExp(`^\\s*(\\S+)\\s+(${NUMBER})\\s+(${NUMBER})\\s+(${NUMBER})\\s+(${NUMBER})\\s+(${NUMBER})\\s+(${NUMBER})\\s*$`);
 const VALUES = new RegExp(`^\\s*(${NUMBER})\\s+(${NUMBER})\\s+(${NUMBER})\\s+(${NUMBER})\\s+(${NUMBER})\\s+(${NUMBER})\\s*$`);
@@ -150,12 +152,15 @@ export function compareReports(reports) {
     const dataReliable = present.every(row => !row.suspicious);
     const inSpec = toleranceMatch && complete && values.every(value => value >= reference.nominal - reference.minusTol - 1e-9
       && value <= reference.nominal + reference.plusTol + 1e-9);
+    const capability = calculateCapability(values, reference.nominal,
+      reference.nominal - reference.minusTol, reference.nominal + reference.plusTol);
     return [{
       ...reference,
       lowerLimit: reference.nominal - reference.minusTol,
       upperLimit: reference.nominal + reference.plusTol,
       actuals,
       spread: values.length > 1 ? Math.max(...values) - Math.min(...values) : 0,
+      ...capability,
       status: !complete || !toleranceMatch || !dataReliable ? 'CHECK DATA' : inSpec ? 'IN SPEC' : 'OUT OF SPEC',
       inSpec,
       toleranceMatch,
@@ -166,8 +171,11 @@ export function compareReports(reports) {
 const csvCell = value => `"${String(value ?? '').replaceAll('"', '""')}"`;
 export function exportComparisonCsv(rows, names) {
   const header = ['Feature', 'Axis', 'Nominal', '+ tolerance', '- tolerance', 'Lower limit', 'Upper limit',
-    ...names.map(name => `${name} actual`), 'Lot spread (max-min)', 'Status'];
+    ...names.map(name => `${name} actual`), 'Lot spread (max-min)', 'Mean', 'Standard deviation', '-3 sigma', '+3 sigma',
+    'Cp', 'Cpu', 'Cpl', 'Cpk', 'Sigma level', 'Tolerance used (%)', 'Capability rating', 'Status'];
   const data = rows.map(row => [row.feature, row.axis, row.nominal, row.plusTol, row.minusTol,
-    row.lowerLimit, row.upperLimit, ...names.map(name => row.actuals[name]), row.spread, row.status]);
+    row.lowerLimit, row.upperLimit, ...names.map(name => row.actuals[name]), row.spread, row.mean,
+    row.standardDeviation, row.minus3Sigma, row.plus3Sigma, row.cp, row.cpu, row.cpl, row.cpk,
+    row.sigmaLevel, row.toleranceUsedPercent, row.rating, row.status]);
   return `\ufeff${[header, ...data].map(row => row.map(csvCell).join(',')).join('\r\n')}\r\n`;
 }

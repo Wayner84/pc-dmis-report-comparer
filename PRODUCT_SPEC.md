@@ -10,9 +10,10 @@ A public, static, browser-only application that compares 1–10 PC-DMIS PDF insp
 - Process PDFs and OCR in the current browser tab; no report contents leave the device.
 - Recognise standard PC-DMIS bitmap report tables with `AX / NOMINAL / +TOL / -TOL / MEAS / DEV / OUTTOL` columns.
 - Align rows by report page, table/feature order, axis, and repeated-axis occurrence.
-- Show feature, axis, nominal, lower/upper limits, each report actual, lot spread, and status.
-- Use IN SPEC, OUT OF SPEC, and CHECK DATA states.
-- Export the displayed comparison as Excel-friendly CSV.
+- Show feature, axis, nominal, lower/upper limits, each report actual, lot spread, mean, sample standard deviation, ±3 sigma, Cp/Cpu/Cpl/Cpk, sigma level, tolerance usage, capability rating, and inspection status.
+- Use IN SPEC, OUT OF SPEC, and CHECK DATA states, plus CAPABLE, MARGINAL, NOT CAPABLE, and INSUFFICIENT DATA capability ratings.
+- Draw a selectable capability chart below the table using nominal and specification limits, report readings, and red/yellow/green sigma bands; allow the chart to be saved as a PNG.
+- Export the displayed comparison and capability values as Excel-friendly CSV.
 - Keep the interface responsive, accessible, and usable on phones and desktops.
 - Explain that OCR output must be reviewed before acceptance decisions.
 

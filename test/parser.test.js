@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseOcrTable, parseOcrPage, compareReports, exportComparisonCsv } from '../src/parser.js';
+import { calculateCapability } from '../src/capability.js';
 
 test('parses PC-DMIS OCR rows and repairs diameter axis', () => {
   const rows = parseOcrTable(`MM LOC1 - DATUM_A_CYL\nAX NOMINAL +TOL -TOL MEAS DEV OUTTOL\nX 0.000 0.050 0.050 0.048 0.048 0.000\n[ 36.190 0.030 0.000 36.212 0.022 0.000`, 'part.pdf', 1, 1);
@@ -65,4 +66,40 @@ test('exports Excel-friendly CSV with escaped fields', () => {
   const row = compareReports({ 'a.pdf': [{source:'a.pdf',page:1,table:1,feature:'DIST1, WIDTH',axis:'M',nominal:2.5,plusTol:.1,minusTol:.1,actual:2.476}] })[0];
   const csv = exportComparisonCsv([row], ['a.pdf']);
   assert.match(csv, /"DIST1, WIDTH"/); assert.match(csv, /IN SPEC/);
+});
+
+test('calculates sample standard deviation, three sigma limits and capability indices', () => {
+  const capability = calculateCapability([9.8, 10, 10.2], 10, 9, 11);
+  assert.ok(Math.abs(capability.mean - 10) < 1e-12);
+  assert.ok(Math.abs(capability.standardDeviation - 0.2) < 1e-12);
+  assert.ok(Math.abs(capability.minus3Sigma - 9.4) < 1e-12);
+  assert.ok(Math.abs(capability.plus3Sigma - 10.6) < 1e-12);
+  assert.ok(Math.abs(capability.cp - (5 / 3)) < 1e-12);
+  assert.ok(Math.abs(capability.cpk - (5 / 3)) < 1e-12);
+  assert.ok(Math.abs(capability.sigmaLevel - 5) < 1e-12);
+  assert.ok(Math.abs(capability.toleranceUsedPercent - 60) < 1e-12);
+  assert.equal(capability.rating, 'CAPABLE');
+});
+
+test('capability uses the nearest specification limit and handles insufficient data', () => {
+  const incapable = calculateCapability([9.1, 9.4, 9.7], 10, 9, 11);
+  assert.ok(incapable.cpl < incapable.cpu);
+  assert.equal(incapable.cpk, incapable.cpl);
+  assert.equal(incapable.rating, 'NOT CAPABLE');
+  const insufficient = calculateCapability([10], 10, 9, 11);
+  assert.equal(insufficient.rating, 'INSUFFICIENT DATA');
+  assert.equal(insufficient.cpk, null);
+});
+
+test('comparison rows and CSV include process capability results', () => {
+  const m = (source, actual) => ({ source, page: 1, table: 1, feature: 'DIST1', axis: 'M', nominal: 10, plusTol: 1, minusTol: 1, actual });
+  const row = compareReports({ a: [m('a', 9.8)], b: [m('b', 10)], c: [m('c', 10.2)] })[0];
+  assert.ok(Math.abs(row.standardDeviation - 0.2) < 1e-12);
+  assert.ok(Math.abs(row.cpk - (5 / 3)) < 1e-12);
+  const csv = exportComparisonCsv([row], ['a', 'b', 'c']);
+  assert.match(csv, /Standard deviation/);
+  assert.match(csv, /-3 sigma/);
+  assert.match(csv, /\+3 sigma/);
+  assert.match(csv, /Cpk/);
+  assert.match(csv, /Sigma level/);
 });

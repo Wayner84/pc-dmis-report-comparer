@@ -10,6 +10,7 @@ let files = [];
 let comparison = [];
 let reportNames = [];
 let editingLabels = false;
+let selectedCapabilityIndex = 0;
 
 const drop = $('#drop');
 $('#files').addEventListener('change', event => selectFiles([...event.target.files]));
@@ -219,6 +220,7 @@ function configureEditableCell(cell, rowIndex, field) {
   cell.contentEditable = 'false';
   cell.addEventListener('input', () => {
     updateEditableText(comparison, rowIndex, field, cell.textContent);
+    if (rowIndex === selectedCapabilityIndex) renderCapability(rowIndex);
   });
   cell.addEventListener('blur', () => {
     if (!updateEditableText(comparison, rowIndex, field, cell.textContent)) {
@@ -255,9 +257,174 @@ function format(value) {
   return value == null ? '—' : Number(value).toFixed(4);
 }
 
+function formatIndex(value) {
+  if (value == null || Number.isNaN(value)) return '—';
+  if (!Number.isFinite(value)) return value > 0 ? '∞' : '-∞';
+  return Number(value).toFixed(3);
+}
+
+function appendMetric(container, label, value, className = '') {
+  const metric = document.createElement('div');
+  metric.className = `metric ${className}`.trim();
+  const strong = document.createElement('strong');
+  strong.textContent = value;
+  const caption = document.createElement('span');
+  caption.textContent = label;
+  metric.append(strong, caption);
+  container.append(metric);
+}
+
+function drawCapabilityChart(result) {
+  const canvas = $('#capability-chart');
+  const context = canvas.getContext('2d');
+  const width = canvas.width;
+  const height = canvas.height;
+  context.clearRect(0, 0, width, height);
+  context.fillStyle = '#ffffff';
+  context.fillRect(0, 0, width, height);
+  context.fillStyle = '#17212b';
+  context.font = '700 32px Inter, system-ui, sans-serif';
+  context.fillText(`${result.feature} · ${result.axis}`, 60, 55);
+  context.font = '20px Inter, system-ui, sans-serif';
+  context.fillStyle = '#536471';
+  context.fillText(`Nominal ${format(result.nominal)} · LSL ${format(result.lowerLimit)} · USL ${format(result.upperLimit)}`, 60, 88);
+
+  const values = reportNames.map(name => result.actuals[name]).filter(Number.isFinite);
+  const candidates = [result.lowerLimit, result.upperLimit, result.nominal, result.mean,
+    result.minus3Sigma, result.plus3Sigma, ...values].filter(Number.isFinite);
+  let minimum = Math.min(...candidates);
+  let maximum = Math.max(...candidates);
+  const specSpan = result.upperLimit - result.lowerLimit;
+  const pad = Math.max(specSpan * 0.16, (maximum - minimum) * 0.12, 0.001);
+  minimum -= pad;
+  maximum += pad;
+  if (maximum <= minimum) maximum = minimum + 1;
+  const left = 85;
+  const right = width - 65;
+  const top = 205;
+  const bottom = 445;
+  const scale = value => left + (value - minimum) / (maximum - minimum) * (right - left);
+  const fillRange = (start, end, colour) => {
+    const x1 = scale(Math.max(minimum, start));
+    const x2 = scale(Math.min(maximum, end));
+    if (x2 > x1) {
+      context.fillStyle = colour;
+      context.fillRect(x1, top, x2 - x1, bottom - top);
+    }
+  };
+
+  context.fillStyle = '#f8d7da';
+  context.fillRect(left, top, right - left, bottom - top);
+  fillRange(result.lowerLimit, result.upperLimit, '#f7fafc');
+  if (Number.isFinite(result.standardDeviation) && result.standardDeviation > 0) {
+    context.save();
+    context.beginPath();
+    context.rect(scale(result.lowerLimit), top, scale(result.upperLimit) - scale(result.lowerLimit), bottom - top);
+    context.clip();
+    fillRange(result.mean - 3 * result.standardDeviation, result.mean + 3 * result.standardDeviation, '#f6c9c7');
+    fillRange(result.mean - 2 * result.standardDeviation, result.mean + 2 * result.standardDeviation, '#ffe3a3');
+    fillRange(result.mean - result.standardDeviation, result.mean + result.standardDeviation, '#bfe8cb');
+    context.restore();
+  }
+
+  context.strokeStyle = '#8b9aa5';
+  context.lineWidth = 2;
+  context.strokeRect(left, top, right - left, bottom - top);
+  const drawLine = (value, colour, label, dash = []) => {
+    if (!Number.isFinite(value)) return;
+    const x = scale(value);
+    context.save();
+    context.strokeStyle = colour;
+    context.lineWidth = 4;
+    context.setLineDash(dash);
+    context.beginPath();
+    context.moveTo(x, top - 14);
+    context.lineTo(x, bottom + 14);
+    context.stroke();
+    context.restore();
+    context.fillStyle = colour;
+    context.font = '700 17px Inter, system-ui, sans-serif';
+    context.textAlign = 'center';
+    context.fillText(label, x, top - 25);
+    context.fillText(format(value), x, bottom + 42);
+  };
+  drawLine(result.lowerLimit, '#b42318', 'LSL');
+  drawLine(result.upperLimit, '#b42318', 'USL');
+  drawLine(result.nominal, '#b51d83', 'Nominal', [9, 7]);
+  drawLine(result.mean, '#145da0', 'Mean', [3, 5]);
+
+  context.textAlign = 'left';
+  values.forEach((value, index) => {
+    const x = scale(value);
+    const y = 305 + ((index % 5) - 2) * 25;
+    context.beginPath();
+    context.fillStyle = '#17212b';
+    context.arc(x, y, 7, 0, Math.PI * 2);
+    context.fill();
+  });
+
+  context.font = '700 20px Inter, system-ui, sans-serif';
+  context.fillStyle = '#17212b';
+  context.fillText(`n=${result.sampleCount}`, 60, 135);
+  context.fillText(`Std dev ${format(result.standardDeviation)}`, 185, 135);
+  context.fillText(`Cp ${formatIndex(result.cp)}`, 455, 135);
+  context.fillText(`Cpk ${formatIndex(result.cpk)}`, 610, 135);
+  context.fillText(`Sigma level ${formatIndex(result.sigmaLevel)}`, 785, 135);
+  context.fillStyle = result.rating === 'CAPABLE' ? '#16734c' : result.rating === 'MARGINAL' ? '#9a6700' : '#b42318';
+  context.fillText(result.rating, 1015, 135);
+
+  const legend = [
+    ['#bfe8cb', 'within ±1σ'], ['#ffe3a3', '±1σ to ±2σ'], ['#f6c9c7', '±2σ to ±3σ'], ['#f8d7da', 'outside specification'],
+  ];
+  context.font = '16px Inter, system-ui, sans-serif';
+  context.fillStyle = '#17212b';
+  let legendX = 65;
+  for (const [colour, label] of legend) {
+    context.fillStyle = colour;
+    context.fillRect(legendX, 535, 24, 18);
+    context.strokeStyle = '#8b9aa5';
+    context.strokeRect(legendX, 535, 24, 18);
+    context.fillStyle = '#17212b';
+    context.fillText(label, legendX + 32, 550);
+    legendX += 270;
+  }
+  context.fillStyle = '#536471';
+  context.fillText('Dots are the report results. Green/yellow/red bands show distance from the lot mean in standard deviations.', 65, 590);
+}
+
+function renderCapability(rowIndex) {
+  const result = comparison[rowIndex];
+  if (!result) return;
+  selectedCapabilityIndex = rowIndex;
+  for (const row of document.querySelectorAll('#tbody tr')) {
+    const selected = Number(row.dataset.rowIndex) === rowIndex;
+    row.classList.toggle('selected', selected);
+    row.setAttribute('aria-selected', String(selected));
+  }
+  $('#capability-summary').textContent = `${result.feature} · ${result.axis} · ${result.sampleCount} result${result.sampleCount === 1 ? '' : 's'} used`;
+  const canvas = $('#capability-chart');
+  canvas.setAttribute('aria-label', `Capability chart for ${result.feature}, axis ${result.axis}. Nominal ${format(result.nominal)}, lower limit ${format(result.lowerLimit)}, upper limit ${format(result.upperLimit)}, Cpk ${formatIndex(result.cpk)}, rating ${result.rating}.`);
+  const metrics = $('#capability-metrics');
+  metrics.replaceChildren();
+  const ratingClass = result.rating.toLowerCase().replaceAll(' ', '-');
+  appendMetric(metrics, 'Capability rating', result.rating, ratingClass);
+  appendMetric(metrics, 'Lot mean', format(result.mean));
+  appendMetric(metrics, 'Sample standard deviation', format(result.standardDeviation));
+  appendMetric(metrics, '-3 sigma', format(result.minus3Sigma));
+  appendMetric(metrics, '+3 sigma', format(result.plus3Sigma));
+  appendMetric(metrics, 'Cp', formatIndex(result.cp));
+  appendMetric(metrics, 'Cpu', formatIndex(result.cpu));
+  appendMetric(metrics, 'Cpl', formatIndex(result.cpl));
+  appendMetric(metrics, 'Cpk', formatIndex(result.cpk), ratingClass);
+  appendMetric(metrics, 'Sigma level to nearest limit', formatIndex(result.sigmaLevel));
+  appendMetric(metrics, 'Tolerance width used', result.toleranceUsedPercent == null ? '—' : `${formatIndex(result.toleranceUsedPercent)}%`);
+  drawCapabilityChart(result);
+}
+
 function renderResults() {
   const header = document.createElement('tr');
-  for (const heading of ['Feature', 'Axis', 'Nominal', 'Lower limit', 'Upper limit', ...reportNames, 'Lot spread', 'Status']) {
+  for (const heading of ['Feature', 'Axis', 'Nominal', 'Lower limit', 'Upper limit', ...reportNames, 'Lot spread',
+    'Mean', 'Std dev', '-3σ', '+3σ', 'Cp', 'Cpu', 'Cpl', 'Cpk', 'Sigma level', 'Tolerance used', 'Capability', 'Status']) {
     appendCell(header, 'th', heading);
     header.lastElementChild.scope = 'col';
   }
@@ -266,6 +433,15 @@ function renderResults() {
   const body = document.createDocumentFragment();
   comparison.forEach((result, rowIndex) => {
     const row = document.createElement('tr');
+    row.dataset.rowIndex = String(rowIndex);
+    row.tabIndex = 0;
+    row.addEventListener('click', () => renderCapability(rowIndex));
+    row.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        renderCapability(rowIndex);
+      }
+    });
     const featureCell = appendCell(row, 'th', result.feature);
     featureCell.scope = 'row';
     configureEditableCell(featureCell, rowIndex, 'feature');
@@ -276,14 +452,41 @@ function renderResults() {
     appendCell(row, 'td', format(result.upperLimit));
     for (const name of reportNames) appendCell(row, 'td', format(result.actuals[name]));
     appendCell(row, 'td', format(result.spread));
+    appendCell(row, 'td', format(result.mean));
+    appendCell(row, 'td', format(result.standardDeviation));
+    appendCell(row, 'td', format(result.minus3Sigma));
+    appendCell(row, 'td', format(result.plus3Sigma));
+    appendCell(row, 'td', formatIndex(result.cp));
+    appendCell(row, 'td', formatIndex(result.cpu));
+    appendCell(row, 'td', formatIndex(result.cpl));
+    appendCell(row, 'td', formatIndex(result.cpk));
+    appendCell(row, 'td', formatIndex(result.sigmaLevel));
+    appendCell(row, 'td', result.toleranceUsedPercent == null ? '—' : `${formatIndex(result.toleranceUsedPercent)}%`);
+    appendCell(row, 'td', result.rating, `status ${result.rating.toLowerCase().replaceAll(' ', '-')}`);
     appendCell(row, 'td', result.status, `status ${result.status.toLowerCase().replaceAll(' ', '-')}`);
     body.append(row);
   });
   $('#tbody').replaceChildren(body);
   setEditingLabels(false);
   $('#result-summary').textContent = `${comparison.length} aligned measurement rows · ${comparison.filter(row => row.status === 'CHECK DATA').length} require review`;
+  renderCapability(comparison.findIndex(row => row.sampleCount >= 2) >= 0
+    ? comparison.findIndex(row => row.sampleCount >= 2) : 0);
   $('#results').hidden = false;
 }
+
+$('#save-chart').addEventListener('click', () => {
+  const result = comparison[selectedCapabilityIndex];
+  if (!result) return;
+  $('#capability-chart').toBlob(blob => {
+    if (!blob) return;
+    const safeName = `${result.feature}-${result.axis}`.replace(/[^a-z0-9_-]+/gi, '-').replace(/^-|-$/g, '') || 'measurement';
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `${safeName}-capability.png`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  }, 'image/png');
+});
 
 $('#download').addEventListener('click', () => {
   const blob = new Blob([exportComparisonCsv(comparison, reportNames)], { type: 'text/csv;charset=utf-8' });
